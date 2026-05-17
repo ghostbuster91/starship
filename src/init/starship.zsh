@@ -57,6 +57,7 @@ prompt_starship_precmd() {
 # only if there's an actual command to run
 prompt_starship_preexec() {
     __starship_get_time && STARSHIP_START_TIME=$STARSHIP_CAPTURED_TIME
+    ::OSC133_PREEXEC::
 }
 
 # Add hook functions

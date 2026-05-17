@@ -84,6 +84,10 @@ function __starship_reset_transient --on-event fish_postexec
     set -g RIGHT_TRANSIENT 0
 end
 
+function __starship_preexec --on-event fish_preexec
+    ::OSC133_PREEXEC::
+end
+
 function __starship_transient_execute
     if commandline --is-valid || test -z (commandline | string collect) && not commandline --paging-mode
         set -g TRANSIENT 1

@@ -24,6 +24,7 @@ starship_preexec() {
     if [ "${STARSHIP_PREEXEC_READY:-}" = "true" ]; then
         STARSHIP_PREEXEC_READY=false
         STARSHIP_START_TIME=$(::STARSHIP:: time)
+        ::OSC133_PREEXEC::
     fi
 
     : "$PREV_LAST_ARG"
@@ -105,7 +106,7 @@ else
         # In order to set STARSHIP_START_TIME use an arithmetic expansion that evaluates to 0
         # To avoid printing anything, use the return value in an ${var:offset:length} substring expansion
         # with offset and length evaluating to 0.
-        PS0='${STARSHIP_START_TIME:$((STARSHIP_START_TIME="$(starship_preexec_ps0)",STARSHIP_PREEXEC_READY=0,0)):0}'"${PS0-}"
+        PS0='::OSC133_PS0_PREEXEC::${STARSHIP_START_TIME:$((STARSHIP_START_TIME="$(starship_preexec_ps0)",STARSHIP_PREEXEC_READY=0,0)):0}'"${PS0-}"
     else
         # We want to avoid destroying an existing DEBUG hook. If we detect one, create
         # a new function that runs both the existing function AND our function, then

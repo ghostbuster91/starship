@@ -1,9 +1,43 @@
+use crate::context::Context;
 use crate::utils::create_command;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::{env, io};
 
 use which::which;
+
+/// Substitutions applied to init scripts beyond `::STARSHIP::` (which is replaced
+/// elsewhere with the absolute path to the starship binary).
+struct InitSubstitutions {
+    /// OSC 133;C printf for shells with a preexec hook (bash/zsh/fish), or a no-op.
+    osc133_preexec: &'static str,
+    /// Embeddable form of OSC 133;C for bash's PS0 fallback (uses prompt-escape syntax,
+    /// wrapped in `\[\]` so bash doesn't count the bytes in cursor-width math).
+    osc133_ps0: &'static str,
+}
+
+impl InitSubstitutions {
+    fn from_root_config() -> Self {
+        Self::new(Context::default().root_config.osc_133)
+    }
+
+    fn new(osc_133: bool) -> Self {
+        if osc_133 {
+            Self {
+                osc133_preexec: r"printf '\033]133;C\007'",
+                osc133_ps0: r"\[\e]133;C\a\]",
+            }
+        } else {
+            // Empty leaves a blank line in the preexec function body, which is
+            // valid in all three of bash/zsh/fish. Using `:` would break fish
+            // since fish doesn't have `:` as a no-op builtin.
+            Self {
+                osc133_preexec: "",
+                osc133_ps0: "",
+            }
+        }
+    }
+}
 
 /* We use a two-phase init here: the first phase gives a simple command to the
 shell. This command evaluates a more complicated script using `source` and
@@ -113,6 +147,7 @@ pub fn init_stub(shell_name: &str) -> io::Result<()> {
         .unwrap_or(shell_name);
 
     let starship = StarshipPath::init()?;
+    let subs = InitSubstitutions::from_root_config();
 
     match shell_basename {
         "bash" => print!(
@@ -165,7 +200,7 @@ pub fn init_stub(shell_name: &str) -> io::Result<()> {
             r#"eval -- "$({0} init bash --print-full-init)""#,
             starship.sprint_posix()?
         ),
-        "zsh" => print_script(ZSH_INIT, &starship.sprint_posix()?),
+        "zsh" => print_script(ZSH_INIT, &starship.sprint_posix()?, &subs),
         "fish" => print!(
             // Fish does process substitution with pipes and psub instead of bash syntax
             r"source ({} init fish --print-full-init | psub)",
@@ -184,12 +219,12 @@ pub fn init_stub(shell_name: &str) -> io::Result<()> {
             r"eval `({} init tcsh --print-full-init)`",
             starship.sprint_posix()?
         ),
-        "nu" => print_script(NU_INIT, &StarshipPath::init()?.sprint()?),
+        "nu" => print_script(NU_INIT, &StarshipPath::init()?.sprint()?, &subs),
         "xonsh" => print!(
             r"execx($({} init xonsh --print-full-init))",
             starship.sprint_posix()?
         ),
-        "cmd" => print_script(CMDEXE_INIT, &StarshipPath::init()?.sprint_cmdexe()?),
+        "cmd" => print_script(CMDEXE_INIT, &StarshipPath::init()?.sprint_cmdexe()?, &subs),
         _ => {
             eprintln!(
                 "{shell_basename} is not yet supported by starship.\n\
@@ -218,16 +253,17 @@ pub fn init_stub(shell_name: &str) -> io::Result<()> {
 prints out the main initialization script */
 pub fn init_main(shell_name: &str) -> io::Result<()> {
     let starship_path = StarshipPath::init()?;
+    let subs = InitSubstitutions::from_root_config();
 
     match shell_name {
-        "bash" => print_script(BASH_INIT, &starship_path.sprint_posix()?),
-        "zsh" => print_script(ZSH_INIT, &starship_path.sprint_posix()?),
-        "fish" => print_script(FISH_INIT, &starship_path.sprint_posix()?),
-        "powershell" => print_script(PWSH_INIT, &starship_path.sprint_pwsh()?),
-        "ion" => print_script(ION_INIT, &starship_path.sprint()?),
-        "elvish" => print_script(ELVISH_INIT, &starship_path.sprint_elv()?),
-        "tcsh" => print_script(TCSH_INIT, &starship_path.sprint_posix()?),
-        "xonsh" => print_script(XONSH_INIT, &starship_path.sprint_posix()?),
+        "bash" => print_script(BASH_INIT, &starship_path.sprint_posix()?, &subs),
+        "zsh" => print_script(ZSH_INIT, &starship_path.sprint_posix()?, &subs),
+        "fish" => print_script(FISH_INIT, &starship_path.sprint_posix()?, &subs),
+        "powershell" => print_script(PWSH_INIT, &starship_path.sprint_pwsh()?, &subs),
+        "ion" => print_script(ION_INIT, &starship_path.sprint()?, &subs),
+        "elvish" => print_script(ELVISH_INIT, &starship_path.sprint_elv()?, &subs),
+        "tcsh" => print_script(TCSH_INIT, &starship_path.sprint_posix()?, &subs),
+        "xonsh" => print_script(XONSH_INIT, &starship_path.sprint_posix()?, &subs),
         _ => {
             println!(
                 "printf \"Shell name detection failed on phase two init.\\n\
@@ -239,9 +275,15 @@ pub fn init_main(shell_name: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn print_script(script: &str, path: &str) {
-    let script = script.replace("::STARSHIP::", path);
-    print!("{script}");
+fn print_script(script: &str, path: &str, subs: &InitSubstitutions) {
+    print!("{}", apply_substitutions(script, path, subs));
+}
+
+fn apply_substitutions(script: &str, path: &str, subs: &InitSubstitutions) -> String {
+    script
+        .replace("::STARSHIP::", path)
+        .replace("::OSC133_PREEXEC::", subs.osc133_preexec)
+        .replace("::OSC133_PS0_PREEXEC::", subs.osc133_ps0)
 }
 
 /* GENERAL INIT SCRIPT NOTES
@@ -319,5 +361,38 @@ mod tests {
             r#""C:\Cool Tools\starship.exe""#
         );
         Ok(())
+    }
+
+    #[test]
+    fn osc_133_disabled_substitutes_noop_in_bash_init() {
+        let subs = InitSubstitutions::new(false);
+        let rendered = apply_substitutions(BASH_INIT, "/usr/bin/starship", &subs);
+        assert!(!rendered.contains("133;C"));
+        assert!(!rendered.contains("::OSC133_PREEXEC::"));
+        assert!(!rendered.contains("::OSC133_PS0_PREEXEC::"));
+    }
+
+    #[test]
+    fn osc_133_enabled_substitutes_printf_in_bash_init() {
+        let subs = InitSubstitutions::new(true);
+        let rendered = apply_substitutions(BASH_INIT, "/usr/bin/starship", &subs);
+        assert!(rendered.contains(r"printf '\033]133;C\007'"));
+        assert!(rendered.contains(r"\[\e]133;C\a\]"));
+        assert!(!rendered.contains("::OSC133_PREEXEC::"));
+        assert!(!rendered.contains("::OSC133_PS0_PREEXEC::"));
+    }
+
+    #[test]
+    fn osc_133_enabled_substitutes_in_zsh_init() {
+        let subs = InitSubstitutions::new(true);
+        let rendered = apply_substitutions(ZSH_INIT, "/usr/bin/starship", &subs);
+        assert!(rendered.contains(r"printf '\033]133;C\007'"));
+    }
+
+    #[test]
+    fn osc_133_enabled_substitutes_in_fish_init() {
+        let subs = InitSubstitutions::new(true);
+        let rendered = apply_substitutions(FISH_INIT, "/usr/bin/starship", &subs);
+        assert!(rendered.contains(r"printf '\033]133;C\007'"));
     }
 }
